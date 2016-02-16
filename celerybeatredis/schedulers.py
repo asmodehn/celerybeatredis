@@ -5,27 +5,31 @@
 # use this file except in compliance with the License. You may obtain a copy
 # of the License at http://www.apache.org/licenses/LICENSE-2.0
 import datetime
+from functools import partial
 
 from celery.beat import Scheduler, ScheduleEntry
+from redis import StrictRedis
+
 from celery import current_app
 import celery.schedules
 from redis.exceptions import LockError
 
 from .task import PeriodicTask
-from .globals import rdb, logger, ADD_ENTRY_ERROR
+from .globals import logger, ADD_ENTRY_ERROR
 
 
 class RedisScheduleEntry(ScheduleEntry):
     scheduler = None
 
-    def __init__(self, task):
+    def __init__(self, scheduler_url, task):
         self._task = task
 
+        self.scheduler_url = scheduler_url
         self.app = current_app._get_current_object()
         self.name = self._task.key  # passing key here as the task name is a human use only field.
         self.task = self._task.task
 
-        self.schedule = self._task.schedule
+        self.schedule = partial(self._task.schedule, celery_schedules=celery.schedules)
 
         self.args = self._task.args
         self.kwargs = self._task.kwargs
@@ -53,12 +57,12 @@ class RedisScheduleEntry(ScheduleEntry):
     def next(self):
         self._task.last_run_at = self.app.now()
         self._task.total_run_count += 1
-        return self.__class__(self._task)
+        return self.__class__(self.scheduler_url, self._task)
 
     __next__ = next
 
     def is_due(self):
-        due = self.schedule.is_due(self.last_run_at)
+        due = self.schedule().is_due(self.last_run_at)
 
         if not self.scheduler._lock_acquired:
             return celery.schedules.schedstate(is_due=False, next=due[1])
@@ -74,7 +78,7 @@ class RedisScheduleEntry(ScheduleEntry):
     def __repr__(self):
         return '<RedisScheduleEntry ({0} {1}(*{2}, **{3}) {{4}})>'.format(
             self.name, self.task, self.args,
-            self.kwargs, self.schedule,
+            self.kwargs, self.schedule(),
         )
 
     def reserve(self, entry):
@@ -89,7 +93,7 @@ class RedisScheduleEntry(ScheduleEntry):
         self._task.save()
 
     @classmethod
-    def from_entry(cls, name, skip_fields=('relative', 'options'), **entry):
+    def from_entry(cls, scheduler_url, name, skip_fields=('relative', 'options'), **entry):
         options = entry.get('options') or {}
         fields = dict(entry)
         for skip_field in skip_fields:
@@ -114,7 +118,7 @@ class RedisScheduleEntry(ScheduleEntry):
         fields['exchange'] = options.get('exchange')
         fields['routing_key'] = options.get('routing_key')
         fields['key'] = fields['name']
-        return cls(PeriodicTask.from_dict(fields))
+        return cls(PeriodicTask.from_dict(fields, scheduler_url))
 
 
 class RedisScheduler(Scheduler):
@@ -133,6 +137,8 @@ class RedisScheduler(Scheduler):
                                       current_app.conf.CELERY_REDIS_SCHEDULER_URL)
 
         self._schedule = {}
+        self.scheduler_url = current_app.conf.CELERY_REDIS_SCHEDULER_URL
+        self.rdb = StrictRedis.from_url(self.scheduler_url)
         self._last_updated = None
         Scheduler.__init__(self, *args, **kwargs)
         self.max_interval = (kwargs.get('max_interval') \
@@ -164,16 +170,16 @@ class RedisScheduler(Scheduler):
     def get_from_database(self):
         self.sync()
         d = {}
-        for task in PeriodicTask.get_all(current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX):
-            t = PeriodicTask.from_dict(task)
-            d[t.key] = RedisScheduleEntry(t)
+        for task in PeriodicTask.get_all(self.scheduler_url, current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX):
+            t = PeriodicTask.from_dict(task, self.scheduler_url)
+            d[t.key] = self.Entry(self.scheduler_url, t)
         return d
 
     def update_from_dict(self, dict_):
         s = {}
         for name, entry in dict_.items():
             try:
-                s[name] = self.Entry.from_entry(name, **entry)
+                s[name] = self.Entry.from_entry(self.scheduler_url, name, **entry)
             except Exception as exc:
                 error(ADD_ENTRY_ERROR, name, exc, entry)
         self.schedule.update(s)
