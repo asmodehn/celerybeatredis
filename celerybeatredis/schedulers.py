@@ -5,6 +5,7 @@
 # of the License at http://www.apache.org/licenses/LICENSE-2.0
 import datetime
 import logging
+import pprint
 from functools import partial
 
 from celery.beat import Scheduler, ScheduleEntry
@@ -265,6 +266,16 @@ class RedisScheduler(Scheduler):
         # Need to store the key of the entry, because the entry may change in the mean time.
         self._dirty.add(new_entry.name)
         return new_entry
+
+    # Overload this if you need to modify the way the task is run.
+    # check parent classes for reference implementation
+    def apply_async(self, entry, publisher=None, **kwargs):
+        logger.info("RedisScheduler: triggering schedule entry : {0}".format(pprint.pformat(entry.__dict__)))
+        async_result = super(RedisScheduler, self).apply_async(entry, publisher, **kwargs)
+        entry.last_task_id = async_result.task_id
+        self.schedule[entry.name].last_task_id = async_result.task_id  # updating schedule for sync to write last_task_id back into Redis  # TODO : find out why this is needed
+        logger.info("RedisScheduler: triggered task : {0}".format(entry.last_task_id))
+        return async_result
 
     def sync(self):
         logger.info('Writing modified entries...')

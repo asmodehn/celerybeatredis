@@ -73,12 +73,13 @@ class PeriodicTask(object):
 
     # datetime
     last_run_at = None
+    last_task_id = None
 
     total_run_count = 0
 
     # Follow celery.beat.SchedulerEntry:__init__() signature as much as possible
     def __init__(self, name, task, schedule, enabled=True, args=(), kwargs=None, options=None,
-                 last_run_at=None, total_run_count=None, **extrakwargs):
+                 last_run_at=None, last_task_id=None, total_run_count=None, **extrakwargs):
         """
         :param name: name of the task ( = redis key )
         :param task: taskname ( as in celery : python function name )
@@ -89,6 +90,7 @@ class PeriodicTask(object):
         :param kwargs: kwargs for the task
         :param options: options for hte task
         :param last_run_at: lat time the task was run
+        :param last_task_id: the last id otf the task triggered by this periodic task
         :param total_run_count: total number of times the task was run
         :return:
         """
@@ -105,6 +107,7 @@ class PeriodicTask(object):
         self.options = options or {}
 
         self.last_run_at = last_run_at
+        self.last_task_id = last_task_id
         self.total_run_count = total_run_count
 
         self.name = name
@@ -153,6 +156,7 @@ class PeriodicTask(object):
         """
         otherdict = other.__dict__  # note : schedule property is not part of the dict.
         otherdict.pop('last_run_at')
+        otherdict.pop('last_task_id')
         otherdict.pop('total_run_count')
         self.__dict__.update(otherdict)
 
