@@ -132,7 +132,7 @@ class RedisScheduleEntry(object):
             logger.info('task {0} is disabled. not triggered.'.format(self.name))
             # if the task is disabled, we always return false, but the time that
             # it is next due is returned as usual
-            return celery.schedulers.schedstate(is_due=False, next=due[1])
+            return celery.schedules.schedstate(is_due=False, next=due[1])
         return due
 
     def __repr__(self):
